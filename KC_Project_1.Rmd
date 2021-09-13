@@ -1,0 +1,210 @@
+---
+title: "US Accidents Visualization"
+author: "Sailesh Kc"
+date: "9/12/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+I am using a custom built API to fetch data for each part. I will be using httr and jsonlite for fetching the data. 
+
+## Mean Median Standard Deviation
+Since visibility is one of the causes of accidents I will be calculating the averages on this data point
+
+First fetching the data required for this part.
+```{r}
+library(httr)
+library(jsonlite)
+
+baseUrl = "http://localhost:8001"
+
+visibilityUrl = paste(baseUrl, '/visibility', sep = "")
+
+visibilityDataRes = GET(visibilityUrl)
+visibilityData = fromJSON(rawToChar(visibilityDataRes$content))
+visibilityData$Visibility <- as.numeric(as.character(visibilityData$Visibility))
+```
+
+Using the data to compute average and plot graph
+```{r}
+library(ggplot2)
+meanData = mean(visibilityData$Visibility)
+sdData = sd(visibilityData$Visibility)
+median(visibilityData$Visibility)
+quantile(visibilityData$Visibility)
+
+summaryData = summary(visibilityData$Visibility)
+print(summaryData)
+
+hist(visibilityData$Visibility)
+boxplot(visibilityData$Visibility)
+
+ggplot(visibilityData, aes(x = Visibility)) +
+stat_function(
+fun = dnorm,
+args = with(visibilityData, c(mean = meanData, sd = sdData))
+) +
+scale_x_continuous("Visibility")
+```
+
+This result is not what I expected. I was expecting that most accidents happen when the visibility is low. This could be because there are not many cars in the raod when the visibility is low.
+
+
+## Correlation
+For this part I will be checking if visibility has any impact on the severity of the accident.
+First we will need to fetch the data needed for this part
+
+```{r}
+severityUrl = paste(baseUrl, '/severity', sep = "")
+
+severityDataRes = GET(severityUrl)
+severityData = fromJSON(rawToChar(severityDataRes$content))
+```
+I will be using corrplot library to plot and see where the severity of the accidents lie in terms of visibility
+```{r}
+library(corrplot)
+plot(severityData)
+```
+
+From this plot diagram we can see that as expected severity of the accident is high when visibility is below 2.
+
+I will be using more data to see if there is more unexpected correlation
+```{r}
+correlationUrl = paste(baseUrl, '/correlation', sep = "")
+correlationRes = GET(correlationUrl)
+correlationData = fromJSON(rawToChar(correlationRes$content))
+```
+
+```{r}
+library(corrplot)
+correlationData$Visibility <- as.numeric(as.character(correlationData$Visibility))
+correlationData$Severity <- as.numeric(as.character(correlationData$Severity))
+correlationData$Distance <- as.numeric(as.character(correlationData$Distance))
+correlationData$Temperature <- as.numeric(as.character(correlationData$Temperature))
+correlationData$Humidity <- as.numeric(as.character(correlationData$Humidity))
+correlationData$Precipitation <- as.numeric(as.character(correlationData$Precipitation))
+x <- cor(correlationData[1:6])
+print(x)
+corrplot(x)
+```
+There seems to be some correlation with amount of distance covered and severity of the accident. But other than that I could not get much information from this diagram. 
+
+## Frequency
+
+```{r}
+statesUrl = paste(baseUrl, '/states', sep = "")
+
+statesDataRes = GET(statesUrl)
+statesData = fromJSON(rawToChar(statesDataRes$content))
+```
+
+```{r}
+library(usmap)
+freq <- as.data.frame(table(statesData$State))
+names(freq) <- c("state", "count")
+
+relativeFreq <- as.data.frame(table(statesData$State)/nrow(statesData))
+freq['Relative Frequency'] = relativeFreq$Freq
+
+print(freq)
+
+plot_usmap(
+  regions = c("states"),
+  data = freq, 
+  values="count",
+  color="red",
+  labels=FALSE
+  ) +
+  scale_fill_continuous(low="white", high= "red", name="Accidents")
+
+```
+
+## Two way table
+First I will be fetching accident data on different sides of the road and traffic signals
+```{r}
+sideUrl = paste(baseUrl, '/sides', sep = "")
+
+sidessDataRes = GET(sideUrl)
+sidesData = fromJSON(rawToChar(sidessDataRes$content))
+```
+
+The data fetched is not in two-way table format so I will need to reconstruct the data. I will filter the dataset where each of the traffic signal were present during the accident and map it to Left or Right of the street where the accident occured.
+
+```{r}
+result <- sidesData[sidesData$Stop == "True",]
+sideTable <- as.data.frame(table(Side = result$Side, result$Stop))
+names(sideTable) <- c("Side", "Var", "Stop")
+sideTable$Var <- NULL
+finalTable <- sideTable
+
+result <- sidesData[sidesData$Crossing == "True",]
+sideTable <-  as.data.frame(table(Side = result$Side, result$Crossing))
+finalTable$Crossing <- sideTable$Freq
+
+result <- sidesData[sidesData$Give_Way == "True",]
+sideTable <-  as.data.frame(table(Side = result$Side, result$Give_Way))
+finalTable$Giveway <- sideTable$Freq
+
+result <- sidesData[sidesData$Junction == "True",]
+sideTable <-  as.data.frame(table(Side = result$Side, result$Junction))
+finalTable$Junction <- sideTable$Freq
+
+result <- sidesData[sidesData$Traffic_Signal == "True",]
+sideTable <-  as.data.frame(table(Side = result$Side, result$Traffic_Signal))
+finalTable$Lights <- sideTable$Freq
+print(finalTable)
+```
+Right side of the road seems to have more accidents compared to the left. For some reason there are more accidents in the junction on the right side of the road than any other traffic signals
+
+## Multiplot
+This part I am trying to see if there is any relation between day/night and severity of the accident
+
+```{r}
+dayUrl = paste(baseUrl, '/day', sep = "")
+
+dayDataRes = GET(dayUrl)
+dayData = fromJSON(rawToChar(dayDataRes$content))
+```
+
+```{r}
+library(ggplot2)
+
+sevTable <- as.data.frame(table("severity" = dayData$Severity, "day_night" = dayData$Sunrise_Sunset))
+print(sevTable)
+ggplot(sevTable, aes(x=severity, y=Freq, colour=day_night)) +
+  geom_point(alpha=1)
+
+ggplot(sevTable, aes(x=severity, fill=Freq)) +
+  geom_density()
+
+plot(sevTable$severity, sevTable$day_night)
+plot(sevTable$day_night, sevTable$Freq)
+
+```
+There seem to be more accidents during the day time but this could only mean that there are more cars on the road. I could clarify on this if I had the data with number of cars on the road during day and night.
+
+## Correlation on distance covered and severity
+
+On second part I noticed correlation between distance and severity. I will be visualizing that in this part.
+
+```{r}
+distanceUrl = paste(baseUrl, '/distance', sep = "")
+
+distanceDataRes = GET(distanceUrl)
+distanceData = fromJSON(rawToChar(distanceDataRes$content))
+```
+
+I will be using plot to see if there is relation between distance and severity
+
+```{r}
+library(ggplot2)
+sevDistanceTable <- as.data.frame(table("severity" = distanceData$Severity, "distance" = distanceData$Distance))
+print(sevDistanceTable)
+plot(sevDistanceTable)
+plot(distanceData)
+```
+As expected chances of the severity of the accident is higher when the distance is greater.
